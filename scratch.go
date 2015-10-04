@@ -2,6 +2,7 @@ package dockerlaunch
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -17,16 +18,27 @@ import (
 	"github.com/rancher/netconf"
 )
 
-const defaultPrefix = "/usr"
+const (
+	defaultPrefix = "/usr"
+	iptables      = "/sbin/iptables"
+	modprobe      = "/sbin/modprobe"
+	systemdRoot   = "/sys/fs/cgroup/systemd/user.slice"
+	distSuffix    = ".dist"
+)
 
 var (
-	mounts [][]string = [][]string{
+	mounts = [][]string{
 		{"devtmpfs", "/dev", "devtmpfs", ""},
 		{"none", "/dev/pts", "devpts", ""},
+		{"shm", "/dev/shm", "tmpfs", "rw,nosuid,nodev,noexec,relatime,size=65536k"},
+		{"mqueue", "/dev/mqueue", "mqueue", "rw,nosuid,nodev,noexec,relatime"},
 		{"none", "/proc", "proc", ""},
 		{"none", "/run", "tmpfs", ""},
 		{"none", "/sys", "sysfs", ""},
 		{"none", "/sys/fs/cgroup", "tmpfs", ""},
+	}
+	systemdMounts = [][]string{
+		{"systemd", "/sys/fs/cgroup/systemd", "cgroup", "none,name=systemd"},
 	}
 )
 
@@ -40,6 +52,9 @@ type Config struct {
 	CgroupHierarchy map[string]string
 	LogFile         string
 	NoLog           bool
+	EmulateSystemd  bool
+	NoFiles         uint64
+	Environment     []string
 }
 
 //Do not throw errors if memory isn't mounted (on an ARM machine)
@@ -127,7 +142,7 @@ func CreateSymlinks(pathSets [][]string) error {
 
 func CreateSymlink(src, dest string) error {
 	if _, err := os.Lstat(dest); os.IsNotExist(err) {
-		log.Debugf("Symlinking %s => %s", src, dest)
+		log.Debugf("Symlinking %s => %s", dest, src)
 		if err = os.Symlink(src, dest); err != nil {
 			return err
 		}
@@ -163,16 +178,22 @@ func execDocker(config *Config, docker, cmd string, args []string) (*exec.Cmd, e
 	}
 	log.Debugf("Launching Docker %s %s %v", docker, cmd, args)
 
+	env := os.Environ()
+	if len(config.Environment) != 0 {
+		env = append(env, config.Environment...)
+	}
+
 	if config.Fork {
 		cmd := exec.Command(docker, args...)
 		if !config.NoLog {
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 		}
+		cmd.Env = env
 		err := cmd.Start()
 		return cmd, err
 	} else {
-		err := syscall.Exec(docker, append([]string{cmd}, args...), os.Environ())
+		err := syscall.Exec(expand(docker), append([]string{cmd}, args...), env)
 		return nil, err
 	}
 }
@@ -422,22 +443,69 @@ func prepare(config *Config, docker string, args ...string) error {
 		return err
 	}
 
-	if err := setupBin(config, docker); err != nil {
+	for _, i := range []string{docker, iptables, modprobe} {
+		if err := setupBin(config, i); err != nil {
+			return err
+		}
+	}
+
+	if err := setUlimit(config); err != nil {
+		return err
+	}
+
+	if err := setupSystemd(config); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func setupBin(config *Config, docker string) error {
-	if _, err := os.Stat(docker); os.IsNotExist(err) {
-		dist := docker + ".dist"
-		if _, err := os.Stat(dist); err == nil {
-			return os.Symlink(dist, docker)
-		}
+func setupSystemd(config *Config) error {
+	if !config.EmulateSystemd {
+		return nil
 	}
 
-	return nil
+	cgroups, err := ioutil.ReadFile(fmt.Sprintf("/proc/%d/cgroup", os.Getpid()))
+	if err != nil {
+		return err
+	}
+
+	if strings.Contains(string(cgroups), "name=systemd") {
+		return nil
+	}
+
+	if err := createMounts(systemdMounts...); err != nil {
+		return err
+	}
+
+	if err := os.Mkdir(systemdRoot, 0755); err != nil {
+		return err
+	}
+
+	return ioutil.WriteFile(path.Join(systemdRoot, "cgroup.procs"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0644)
+}
+
+func expand(bin string) string {
+	expanded, err := exec.LookPath(bin)
+	if err == nil {
+		return expanded
+	}
+	return bin
+}
+
+func setupBin(config *Config, bin string) error {
+	expanded, err := exec.LookPath(bin)
+	if err == nil {
+		return nil
+	}
+
+	expanded, err = exec.LookPath(bin + distSuffix)
+	if err != nil {
+		// Purposely not returning error
+		return nil
+	}
+
+	return CreateSymlink(expanded, expanded[:len(expanded)-len(distSuffix)])
 }
 
 func setupLogging(config *Config) error {
@@ -458,6 +526,20 @@ func setupLogging(config *Config) error {
 	syscall.Dup2(int(output.Fd()), int(os.Stderr.Fd()))
 
 	return nil
+}
+
+func setUlimit(cfg *Config) error {
+	var rLimit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit); err != nil {
+		return err
+	}
+	if cfg.NoFiles == 0 {
+		rLimit.Max = 1000000
+	} else {
+		rLimit.Max = cfg.NoFiles
+	}
+	rLimit.Cur = rLimit.Max
+	return syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 }
 
 func runOrExec(config *Config, docker string, args ...string) (*exec.Cmd, error) {
