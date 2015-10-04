@@ -42,11 +42,12 @@ type Config struct {
 	NoLog           bool
 }
 
+//Do not throw errors if memory isn't mounted (on an ARM machine)
 func createMounts(mounts ...[]string) error {
 	for _, mount := range mounts {
 		log.Debugf("Mounting %s %s %s %s", mount[0], mount[1], mount[2], mount[3])
 		err := util.Mount(mount[0], mount[1], mount[2], mount[3])
-		if err != nil {
+		if err != nil && mount[1] != "/sys/fs/cgroup/memory" {
 			return err
 		}
 	}

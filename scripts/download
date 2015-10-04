@@ -40,14 +40,18 @@ download()
 
 mkdir -p ${BUILD}
 
-if [ -e base-image/dist/base-files.tar.gz ]; then
-    cp base-image/dist/base-files.tar.gz build/
-else
-    download 920a7e413c34bf94928c3e6c8aad1dcca9bd0128 https://github.com/rancher/docker-from-scratch/releases/download/bin-v0.2.0/base-files.tar.gz
-    cp assets/base-files.tar.gz build
+if [ ! -e base-image/dist/base-files.tar.gz ]; then
+    base-image/build.sh
 fi
 
-download 9a711e6b98a388b12091cf716c5996b67a2e223a https://get.docker.com/builds/Linux/x86_64/docker-1.8.1
+cp base-image/dist/base-files.tar.gz build/
 
-cp assets/docker-* build/docker
-chmod +x build/docker
+# Download docker armhf binary
+ID=$(docker run -d ubuntu sh -c "apt-get update && apt-get install -y wget && wget https://downloads.hypriot.com/docker-hypriot_1.8.2-1_armhf.deb && dpkg-deb -x docker-hypriot_1.8.2-1_armhf.deb hypriot")
+docker logs -f ${ID} &
+docker wait ${ID}
+docker cp ${ID}:/hypriot/usr/bin/docker build/
+
+# We got ca-certificates for free...
+docker cp ${ID}:/etc/ssl/certs/ca-certificates.crt build/
+docker rm -vf ${ID} || true

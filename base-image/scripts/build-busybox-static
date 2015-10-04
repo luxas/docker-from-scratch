@@ -46,4 +46,4 @@ busybox_install()
     make
 }
 
-busybox_install ${CONFIG}/buildroot-config-static ${CONFIG}/busybox-ps-modprobe-only.config ${DIST}/rootfs-static.tar
+busybox_install ${CONFIG}/rpi-buildroot-config-static ${CONFIG}/busybox-ps-modprobe-only.config ${DIST}/rootfs-static.tar

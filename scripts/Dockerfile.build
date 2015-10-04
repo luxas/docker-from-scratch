@@ -4,9 +4,12 @@ RUN go get github.com/mitchellh/gox
 RUN go get github.com/tools/godep
 
 ENV GOPATH /go/src/github.com/rancher/docker-from-scratch/Godeps/_workspace:/go
+ENV PATH $PATH:/go/bin/linux_arm
 
 WORKDIR /go/src/github.com/rancher/docker-from-scratch
 
 COPY . .
 
-RUN godep go build -ldflags "-linkmode external -extldflags -static" -o build/dockerlaunch ./main
+RUN GOOS=linux GOARCH=arm godep go build -o build/dockerlaunch ./main 
+
+#-ldflags "-linkmode external -extldflags -static"
