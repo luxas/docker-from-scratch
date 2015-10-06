@@ -47,10 +47,10 @@ fi
 cp base-image/dist/base-files.tar.gz build/
 
 # Download docker armhf binary
-ID=$(docker run -d ubuntu sh -c "apt-get update && apt-get install -y wget && wget https://downloads.hypriot.com/docker-hypriot_1.8.2-1_armhf.deb && dpkg-deb -x docker-hypriot_1.8.2-1_armhf.deb hypriot")
+ID=$(docker run -d ubuntu sh -c "apt-get update && apt-get install -y wget && wget https://downloads.hypriot.com/docker-1.8.2-static-amrv7.tar.gz && tar -xf docker-1.8.2-static-amrv7.tar.gz && mv docker* docker")
 docker logs -f ${ID} &
 docker wait ${ID}
-docker cp ${ID}:/hypriot/usr/bin/docker build/
+docker cp ${ID}:/docker build/
 
 # We got ca-certificates for free...
 docker cp ${ID}:/etc/ssl/certs/ca-certificates.crt build/
